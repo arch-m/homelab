@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly lightweight backup timer for {{ inventory_hostname }}
+
+[Timer]
+OnCalendar={{ backup_on_calendar }}
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,31 @@
+---
+- name: Run lightweight backups
+  hosts: pi,server
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Ensure backup script exists
+      ansible.builtin.stat:
+        path: /usr/local/bin/lab-backup.sh
+      register: backup_script
+      when: backup_enabled | bool
+
+    - name: Run lightweight backup script
+      ansible.builtin.command: /usr/local/bin/lab-backup.sh
+      when: backup_enabled | bool and backup_script.stat.exists
+
+    - name: Count retained backup directories
+      ansible.builtin.find:
+        paths: "{{ backup_dir }}/{{ inventory_hostname }}"
+        file_type: directory
+        depth: 1
+      register: retained_backups
+      when: backup_enabled | bool
+
+    - name: Report retained backups
+      ansible.builtin.debug:
+        msg:
+          - "Backups on {{ inventory_hostname }}: {{ retained_backups.files | length }}"
+          - "Retention target: {{ backup_keep }}"
+      when: backup_enabled | bool

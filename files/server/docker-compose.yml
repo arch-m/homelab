@@ -1,0 +1,310 @@
+name: ${COMPOSE_PROJECT_NAME:?required}
+
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    environment:
+      PI_IP: ${PI_IP:?required}
+      CADDY_EMAIL: ${CADDY_EMAIL:?required}
+      GITEA_DOMAIN: ${GITEA_DOMAIN:?required}
+      GRAFANA_HOST: ${GRAFANA_HOST:?required}
+      PROMETHEUS_HOST: ${PROMETHEUS_HOST:?required}
+      LOKI_HOST: ${LOKI_HOST:?required}
+      MEILI_HOST: ${MEILI_HOST:?required}
+      MINIO_HOST: ${MINIO_HOST:?required}
+      MINIO_API_HOST: ${MINIO_API_HOST:?required}
+      OLLAMA_HOSTNAME: ${OLLAMA_HOSTNAME:?required}
+      PIHOLE_HOST: ${PIHOLE_HOST:?required}
+      SEARXNG_HOSTNAME: ${SEARXNG_HOSTNAME:?required}
+      ADMINER_HOST: ${ADMINER_HOST:?required}
+      RPI_PROXY_HOST: ${RPI_PROXY_HOST:?required}
+      RPI_HTTP_PORT: ${RPI_HTTP_PORT:?required}
+    ports:
+      - "${CADDY_HTTP_PORT:?required}:80"
+      - "${CADDY_HTTPS_PORT:?required}:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - gitea
+      - grafana
+      - meilisearch
+      - minio
+      - ollama
+      - pihole
+      - searxng
+    networks:
+      - front
+      - apps
+      - monitoring
+    security_opt:
+      - no-new-privileges:true
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_DB: ${POSTGRES_DB:?required}
+      TZ: ${TZ:?required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?required} -d ${POSTGRES_DB:?required}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [apps]
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [apps]
+    security_opt:
+      - no-new-privileges:true
+
+  adminer:
+    image: adminer:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8080"
+    profiles: ["tools"]
+    networks: [apps]
+    security_opt:
+      - no-new-privileges:true
+
+  pihole:
+    image: pihole/pihole:latest
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:?required}
+      FTLCONF_webserver_api_password: ${PIHOLE_WEBPASSWORD:?required}
+      FTLCONF_webserver_domain: ${PIHOLE_HOST:?required}
+      FTLCONF_dns_upstreams: ${PIHOLE_UPSTREAM_DNS:?required}
+      FTLCONF_dns_listeningMode: all
+      FTLCONF_misc_etc_dnsmasq_d: "true"
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+    volumes:
+      - pihole_data:/etc/pihole
+      - ./pihole/dnsmasq.d/05-local-domain.conf:/etc/dnsmasq.d/05-local-domain.conf:ro
+    cap_add:
+      - NET_ADMIN
+    networks: [apps]
+    security_opt:
+      - no-new-privileges:true
+
+  gitea:
+    image: gitea/gitea:1.22.6
+    restart: unless-stopped
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__server__DOMAIN: ${GITEA_DOMAIN:?required}
+      GITEA__server__ROOT_URL: ${GITEA_ROOT_URL:?required}
+      GITEA__server__START_SSH_SERVER: "false"
+      GITEA__server__SSH_PORT: ${GITEA_SSH_PORT:?required}
+      GITEA__security__INSTALL_LOCK: "true"
+    expose:
+      - "3000"
+    ports:
+      - "${GITEA_SSH_PORT:?required}:22"
+    volumes:
+      - gitea_data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    networks: [apps]
+    security_opt:
+      - no-new-privileges:true
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.24.0
+    restart: unless-stopped
+    environment:
+      MEILI_ENV: production
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:?required}
+    volumes:
+      - meili_data:/meili_data
+    expose:
+      - "7700"
+    networks: [apps]
+    security_opt:
+      - no-new-privileges:true
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?required}
+    volumes:
+      - minio_data:/data
+    expose:
+      - "9000"
+      - "9001"
+    networks: [apps]
+    security_opt:
+      - no-new-privileges:true
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    expose:
+      - "11434"
+    networks: [apps]
+
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    environment:
+      SEARXNG_BASE_URL: https://${SEARXNG_HOSTNAME:?required}
+      SEARXNG_SECRET_KEY: ${SEARXNG_SECRET_KEY:?required}
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    expose:
+      - "8080"
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "SETGID", "SETUID"]
+    networks: [apps]
+    security_opt:
+      - no-new-privileges:true
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    expose:
+      - "9090"
+    extra_hosts:
+      - "rpi:${PI_IP:?required}"
+    networks: [monitoring]
+    security_opt:
+      - no-new-privileges:true
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${ADMIN_USER:?required}
+      GF_SECURITY_ADMIN_PASSWORD: ${ADMIN_PASSWORD:?required}
+      GF_SERVER_ROOT_URL: https://${GRAFANA_HOST:?required}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    expose:
+      - "3000"
+    depends_on:
+      - prometheus
+      - loki
+    networks: [monitoring]
+    security_opt:
+      - no-new-privileges:true
+
+  loki:
+    image: grafana/loki:2.9.8
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/config.yml"]
+    volumes:
+      - ./loki/config.yml:/etc/loki/config.yml:ro
+      - loki_data:/loki
+    expose:
+      - "3100"
+    networks: [monitoring]
+    security_opt:
+      - no-new-privileges:true
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    restart: unless-stopped
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes:
+      - ./promtail/config.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    networks: [monitoring]
+
+  node_exporter:
+    image: prom/node-exporter:latest
+    restart: unless-stopped
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    expose:
+      - "9100"
+    networks: [monitoring]
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    devices:
+      - /dev/kmsg
+    expose:
+      - "8080"
+    networks: [monitoring]
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
+  postgres_data: {}
+  redis_data: {}
+  gitea_data: {}
+  meili_data: {}
+  minio_data: {}
+  ollama_data: {}
+  prometheus_data: {}
+  grafana_data: {}
+  loki_data: {}
+  pihole_data: {}
+
+networks:
+  front: {}
+  apps: {}
+  monitoring: {}

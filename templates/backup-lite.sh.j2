@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="{{ project_root }}/{{ stack_name }}"
+BACKUP_BASE="{{ backup_dir }}/{{ inventory_hostname }}"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+TARGET="${BACKUP_BASE}/${STAMP}"
+
+mkdir -p "${TARGET}"
+
+if [ ! -d "${ROOT_DIR}" ]; then
+  exit 0
+fi
+
+cd "${ROOT_DIR}"
+
+if docker compose ps --services | grep -qx postgres; then
+  docker compose exec -T postgres \
+    sh -lc 'PGPASSWORD="{{ postgres.password }}" pg_dump -U "{{ postgres.user }}" "{{ postgres.db }}"' \
+    | gzip -c > "${TARGET}/postgres-{{ postgres.db }}.sql.gz"
+fi
+
+{% for volume in backup_critical_volumes | default([]) %}
+VOLUME_NAME="{{ compose_project }}_{{ volume }}"
+if docker volume inspect "${VOLUME_NAME}" >/dev/null 2>&1; then
+  docker run --rm \
+    -v "${VOLUME_NAME}:/source:ro" \
+    -v "${TARGET}:/backup" \
+    alpine:3.20 \
+    tar -czf "/backup/${VOLUME_NAME}.tar.gz" -C /source .
+fi
+{% endfor %}
+
+if [ -d "${BACKUP_BASE}" ]; then
+  ls -1dt "${BACKUP_BASE}"/* 2>/dev/null | tail -n +{{ backup_keep + 1 }} | xargs -r rm -rf
+fi

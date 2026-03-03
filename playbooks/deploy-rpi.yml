@@ -1,0 +1,71 @@
+---
+- name: Deploy Raspberry Pi stack
+  hosts: pi
+  become: true
+  gather_facts: true
+
+  vars:
+    root_dir: "{{ project_root }}/rpi"
+
+  tasks:
+    - name: Assert required Raspberry Pi secrets are defined
+      ansible.builtin.assert:
+        that:
+          - postgres.password | length > 0
+        fail_msg: >-
+          Missing required Raspberry Pi secrets. Export
+          LAB_POSTGRES_PASSWORD before running deploy-rpi.
+
+    - name: Ensure deployment directory exists
+      ansible.builtin.file:
+        path: "{{ root_dir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Copy Raspberry Pi stack files
+      ansible.builtin.copy:
+        src: ../files/rpi/
+        dest: "{{ root_dir }}/"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+        directory_mode: '0755'
+
+    - name: Render Raspberry Pi environment file
+      ansible.builtin.template:
+        src: ../templates/rpi.env.j2
+        dest: "{{ root_dir }}/.env"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+
+    - name: Ensure Raspberry Pi web root exists
+      ansible.builtin.file:
+        path: "{{ root_dir }}/nginx/html"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Render Raspberry Pi status page
+      ansible.builtin.template:
+        src: ../templates/rpi-index.html.j2
+        dest: "{{ root_dir }}/nginx/html/index.html"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Deploy stack with docker compose module
+      community.docker.docker_compose_v2:
+        project_src: "{{ root_dir }}"
+        pull: "{{ compose_pull }}"
+        remove_orphans: "{{ compose_remove_orphans }}"
+        state: present
+
+    - name: Enable compose service for Raspberry Pi stack
+      ansible.builtin.systemd:
+        name: compose@rpi
+        enabled: true
+        state: started

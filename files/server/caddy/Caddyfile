@@ -1,0 +1,75 @@
+{
+    email {$CADDY_EMAIL}
+}
+
+(common) {
+    encode gzip
+    tls internal
+    header {
+        -Server
+    }
+}
+
+:80 {
+    respond "Lab infrastructure online" 200
+}
+
+{$GITEA_DOMAIN} {
+    import common
+    reverse_proxy gitea:3000
+}
+
+{$GRAFANA_HOST} {
+    import common
+    reverse_proxy grafana:3000
+}
+
+{$PROMETHEUS_HOST} {
+    import common
+    reverse_proxy prometheus:9090
+}
+
+{$LOKI_HOST} {
+    import common
+    reverse_proxy loki:3100
+}
+
+{$MEILI_HOST} {
+    import common
+    reverse_proxy meilisearch:7700
+}
+
+{$MINIO_HOST} {
+    import common
+    reverse_proxy minio:9001
+}
+
+{$MINIO_API_HOST} {
+    import common
+    reverse_proxy minio:9000
+}
+
+{$OLLAMA_HOSTNAME} {
+    import common
+    reverse_proxy ollama:11434
+}
+
+{$PIHOLE_HOST} {
+    import common
+    reverse_proxy pihole:80
+}
+
+{$SEARXNG_HOSTNAME} {
+    import common
+    reverse_proxy searxng:8080
+}
+
+{$ADMINER_HOST} {
+    import common
+    reverse_proxy adminer:8080
+}
+
+{$RPI_PROXY_HOST} {
+    import common
+    reverse_proxy {$PI_IP}:{$RPI_HTTP_PORT}
+}

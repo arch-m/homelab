@@ -1,0 +1,113 @@
+---
+- name: Deploy server stack
+  hosts: server
+  become: true
+  gather_facts: true
+
+  vars:
+    root_dir: "{{ project_root }}/server"
+    use_compose_module: true
+
+  tasks:
+    - name: Assert required server secrets are defined
+      ansible.builtin.assert:
+        that:
+          - postgres.password | length > 0
+          - admin.password | length > 0
+          - meili_master_key | length > 0
+          - minio.root_password | length > 0
+          - searxng.secret_key | length > 0
+          - pihole.webpassword | length > 0
+        fail_msg: >-
+          Missing required server secrets. Export LAB_ADMIN_PASSWORD,
+          LAB_POSTGRES_PASSWORD, LAB_MEILI_MASTER_KEY,
+          LAB_MINIO_ROOT_PASSWORD, LAB_SEARXNG_SECRET_KEY and
+          LAB_PIHOLE_WEBPASSWORD before running deploy-server.
+
+    - name: Ensure deployment directory exists
+      ansible.builtin.file:
+        path: "{{ root_dir }}"
+        state: directory
+        owner: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        group: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        mode: '0755'
+
+    - name: Copy server stack files
+      ansible.builtin.copy:
+        src: ../files/server/
+        dest: "{{ root_dir }}/"
+        owner: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        group: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        mode: '0644'
+        directory_mode: '0755'
+
+    - name: Render server environment file
+      ansible.builtin.template:
+        src: ../templates/server.env.j2
+        dest: "{{ root_dir }}/.env"
+        owner: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        group: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        mode: '0600'
+
+    - name: Ensure SearXNG config directory exists
+      ansible.builtin.file:
+        path: "{{ root_dir }}/searxng"
+        state: directory
+        owner: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        group: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        mode: '0755'
+
+    - name: Render Prometheus config
+      ansible.builtin.template:
+        src: ../templates/prometheus.yml.j2
+        dest: "{{ root_dir }}/prometheus/prometheus.yml"
+        owner: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        group: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        mode: '0644'
+
+    - name: Render SearXNG config
+      ansible.builtin.template:
+        src: ../templates/searxng.settings.yml.j2
+        dest: "{{ root_dir }}/searxng/settings.yml"
+        owner: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        group: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        mode: '0644'
+
+    - name: Ensure Pi-hole local DNS override directory exists
+      ansible.builtin.file:
+        path: "{{ root_dir }}/pihole/dnsmasq.d"
+        state: directory
+        owner: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        group: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        mode: '0755'
+      when: pihole.enabled | default(false) | bool
+
+    - name: Render Pi-hole wildcard local DNS override
+      ansible.builtin.template:
+        src: ../templates/pihole-local-dns.conf.j2
+        dest: "{{ root_dir }}/pihole/dnsmasq.d/05-local-domain.conf"
+        owner: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        group: "{{ ansible_user if (ansible_become | default(true) | bool) else omit }}"
+        mode: '0644'
+      when: pihole.enabled | default(false) | bool
+
+    - name: Deploy stack with docker compose module
+      community.docker.docker_compose_v2:
+        project_src: "{{ root_dir }}"
+        pull: "{{ compose_pull }}"
+        remove_orphans: "{{ compose_remove_orphans }}"
+        state: present
+      when: use_compose_module | bool
+
+    - name: Deploy stack with docker compose CLI fallback
+      ansible.builtin.command: docker compose up -d --remove-orphans
+      args:
+        chdir: "{{ root_dir }}"
+      when: not (use_compose_module | bool)
+
+    - name: Enable compose service for server stack
+      ansible.builtin.systemd:
+        name: compose@server
+        enabled: true
+        state: started
+      when: ansible_become | default(true) | bool

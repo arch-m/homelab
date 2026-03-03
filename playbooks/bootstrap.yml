@@ -1,0 +1,128 @@
+---
+- name: Bootstrap lab nodes
+  hosts: pi,server
+  become: true
+  gather_facts: true
+
+  vars:
+    node_root_dir: "{{ project_root }}/{{ stack_name }}"
+
+  tasks:
+    - name: Install base packages on Debian
+      ansible.builtin.apt:
+        name: "{{ common_packages + ['python3-docker'] }}"
+        state: present
+        update_cache: true
+      when: ansible_facts['os_family'] == 'Debian'
+
+    - name: Install Docker on Debian (only if missing)
+      ansible.builtin.shell: curl -fsSL https://get.docker.com | sh
+      args:
+        creates: /usr/bin/docker
+      when: ansible_facts['os_family'] == 'Debian'
+
+    - name: Install base packages on Arch
+      ansible.builtin.pacman:
+        name: "{{ common_packages + ['docker', 'docker-compose', 'python-docker'] }}"
+        state: present
+        update_cache: true
+      when: ansible_facts['os_family'] == 'Archlinux'
+
+    - name: Ensure docker group exists
+      ansible.builtin.group:
+        name: docker
+        state: present
+
+    - name: Enable and start Docker
+      ansible.builtin.systemd:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Add deploy user to docker group
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
+
+    - name: Ensure project root exists
+      ansible.builtin.file:
+        path: "{{ project_root }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Ensure node stack root exists
+      ansible.builtin.file:
+        path: "{{ node_root_dir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Ensure backup root exists
+      ansible.builtin.file:
+        path: "{{ backup_dir }}/{{ inventory_hostname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0750'
+      when: backup_enabled | bool
+
+    - name: Ensure Docker config directory exists
+      ansible.builtin.file:
+        path: /etc/docker
+        state: directory
+        mode: '0755'
+
+    - name: Deploy Docker daemon settings
+      ansible.builtin.template:
+        src: ../templates/docker-daemon.json.j2
+        dest: /etc/docker/daemon.json
+        mode: '0644'
+      notify: Restart docker
+
+    - name: Install systemd compose template
+      ansible.builtin.template:
+        src: ../templates/systemd-compose@.service.j2
+        dest: /etc/systemd/system/compose@.service
+        mode: '0644'
+
+    - name: Install local lightweight backup script
+      ansible.builtin.template:
+        src: ../templates/backup-lite.sh.j2
+        dest: /usr/local/bin/lab-backup.sh
+        mode: '0750'
+      when: backup_enabled | bool
+
+    - name: Install backup systemd service
+      ansible.builtin.template:
+        src: ../templates/lab-backup.service.j2
+        dest: /etc/systemd/system/lab-backup.service
+        mode: '0644'
+      when: backup_enabled | bool
+
+    - name: Install backup systemd timer
+      ansible.builtin.template:
+        src: ../templates/lab-backup.timer.j2
+        dest: /etc/systemd/system/lab-backup.timer
+        mode: '0644'
+      when: backup_enabled | bool
+
+    - name: Reload systemd units
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable backup timer
+      ansible.builtin.systemd:
+        name: lab-backup.timer
+        enabled: true
+        state: started
+      when: backup_enabled | bool
+
+  handlers:
+    - name: Restart docker
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted

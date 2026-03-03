@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Raspberry Pi Lab</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem auto; max-width: 720px; line-height: 1.5; }
+    h1 { margin-bottom: 0.25rem; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; }
+    ul { margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Raspberry Pi Lab</h1>
+  <p>Edge services are running.</p>
+  <div class="card">
+    <strong>Published ports</strong>
+    <ul>
+      <li>Nginx: {{ rpi_service_ports.nginx }}</li>
+      <li>Node Exporter: {{ rpi_service_ports.node_exporter }}</li>
+      <li>cAdvisor: {{ rpi_service_ports.cadvisor }}</li>
+      <li>Adminer (tools profile): {{ rpi_service_ports.adminer }}</li>
+    </ul>
+  </div>
+</body>
+</html>

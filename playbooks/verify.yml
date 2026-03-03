@@ -1,0 +1,100 @@
+---
+- name: Verify stack health and policy
+  hosts: pi,server
+  become: true
+  gather_facts: true
+
+  vars:
+    root_dir: "{{ project_root }}/{{ stack_name }}"
+    expected_ports: >-
+      {{
+        (
+          ['80', '443', gitea.ssh_port | string]
+          + (['53'] if (pihole.enabled | default(false) | bool) else [])
+        )
+        if inventory_hostname in groups['server']
+        else [
+          rpi_service_ports.nginx | string,
+          rpi_service_ports.node_exporter | string,
+          rpi_service_ports.cadvisor | string
+        ]
+      }}
+
+  tasks:
+    - name: Verify Docker service is active
+      ansible.builtin.command: systemctl is-active docker
+      register: docker_active
+      changed_when: false
+      failed_when: docker_active.stdout | trim != 'active'
+
+    - name: Verify compose stack service is active
+      ansible.builtin.command: "systemctl is-active compose@{{ stack_name }}"
+      register: compose_active
+      changed_when: false
+      failed_when: compose_active.stdout | trim != 'active'
+      when: ansible_become | default(true) | bool
+
+    - name: Verify compose stack service is enabled
+      ansible.builtin.command: "systemctl is-enabled compose@{{ stack_name }}"
+      register: compose_enabled
+      changed_when: false
+      failed_when: compose_enabled.stdout | trim != 'enabled'
+      when: ansible_become | default(true) | bool
+
+    - name: Verify environment file permissions
+      ansible.builtin.stat:
+        path: "{{ root_dir }}/.env"
+      register: env_file
+
+    - name: Assert .env permission is 0600
+      ansible.builtin.assert:
+        that:
+          - env_file.stat.exists
+          - env_file.stat.mode == '0600'
+        fail_msg: "{{ root_dir }}/.env must exist with mode 0600"
+
+    - name: Validate docker compose configuration
+      ansible.builtin.command: docker compose config -q
+      args:
+        chdir: "{{ root_dir }}"
+      changed_when: false
+
+    - name: Get published ports for stack
+      ansible.builtin.shell: |
+        docker ps \
+          --filter "label=com.docker.compose.project={{ compose_project }}" \
+          --format '{% raw %}{{.Ports}}{% endraw %}' \
+          | tr ',' '\n' \
+          | sed -nE 's/.*0\.0\.0\.0:([0-9]+)->.*/\1/p; s/.*\[::\]:([0-9]+)->.*/\1/p' \
+          | sort -u
+      register: published_ports
+      changed_when: false
+
+    - name: Detect unexpected published ports
+      ansible.builtin.set_fact:
+        unexpected_ports: "{{ published_ports.stdout_lines | difference(expected_ports) }}"
+        missing_ports: "{{ expected_ports | difference(published_ports.stdout_lines) }}"
+
+    - name: Assert no unexpected published ports
+      ansible.builtin.assert:
+        that:
+          - unexpected_ports | length == 0
+          - missing_ports | length == 0
+        fail_msg: >-
+          Port policy failed on {{ inventory_hostname }}.
+          Unexpected: {{ unexpected_ports }}.
+          Missing expected: {{ missing_ports }}.
+
+    - name: Verify backup timer is active
+      ansible.builtin.command: systemctl is-active lab-backup.timer
+      register: backup_timer_active
+      changed_when: false
+      failed_when: backup_enabled | bool and (backup_timer_active.stdout | trim != 'active')
+      when: ansible_become | default(true) | bool and backup_enabled | bool
+
+    - name: Verify backup timer is enabled
+      ansible.builtin.command: systemctl is-enabled lab-backup.timer
+      register: backup_timer_enabled
+      changed_when: false
+      failed_when: backup_enabled | bool and (backup_timer_enabled.stdout | trim != 'enabled')
+      when: ansible_become | default(true) | bool and backup_enabled | bool
